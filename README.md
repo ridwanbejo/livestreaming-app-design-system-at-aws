@@ -81,7 +81,7 @@ Now, let me explain  more about the architecture and proposed AWS services by fo
 
 That's the explanation of the above diagram by using step by step approach. You may check enlarged diagram through this [draw.io link](https://drive.google.com/file/d/10dLIEEIb_2gqbfVw5GhzCQ9prS7ridgs/view?usp=sharing)
 
->> NOTE: this architecture is not proven on lab environment even more at production. As I explained before, I build this architecture by using research approach from various materials such as AWS documentation and blog. The purpose of this solution architecture just to shape my system design skill based on AWS Well-architected framework and answer an interview case study challenge. Thank you for your understanding.
+> NOTE: this architecture is not proven on lab environment even more at production. As I explained before, I build this architecture by using research approach from various materials such as AWS documentation and blog. The purpose of this solution architecture just to shape my system design skill based on AWS Well-architected framework and answer an interview case study challenge. Thank you for your understanding.
 
 ### A.2. What's missing from the architecture above?
 
@@ -190,7 +190,7 @@ Let me explain the architecture consideration from the above diagram based on de
 
 ### C.1. Operational Excellence
 
->> How can your design help us to develop faster and operate easier?
+> How can your design help us to develop faster and operate easier?
 
 Architecture-related principles:
 
@@ -216,7 +216,7 @@ Non architecture-related principles but nice to have:
 
 ### C.2. Security
 
->> How does your design have ability to protect our assets from unwanted use?
+> How does your design have ability to protect our assets from unwanted use?
 
 Architecture-related principles:
 
@@ -233,7 +233,7 @@ Non architecture-related principles but nice to have:
 
 ### C.3. Reliability
 
->> How can your design run correctly and consistently in time of failure?
+> How can your design run correctly and consistently in time of failure?
 
 Architecture-related principles:
 
@@ -266,7 +266,7 @@ Non architecture-related principles but nice to have:
 
 ### C.5. Cost Optimization
 
->> How are your design able to give us the lowest price point available while serving the requirements?
+> How are your design able to give us the lowest price point available while serving the requirements?
 
 Architecture-related principles:
 
