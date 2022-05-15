@@ -1,0 +1,341 @@
+<!doctype html>
+<html>
+<head>
+<meta http-equiv="content-type" content="text/html; charset=utf-8">
+<style type="text/css">
+td, th { border: 1px solid #c3c3c3; padding: 0 3px 0 3px; }
+table { border-collapse: collapse; }
+img { max-width: 100%; }
+</style>
+<meta name="generator" content="ReText 7.1.0">
+<title>README</title>
+<style type="text/css">
+</style>
+</head>
+<body>
+<h1>Live Streaming App System Design</h1>
+<h2>A. Solution Architecture</h2>
+<h2>A.1.1 Proposed Architecture</h2>
+<p>After performed some researches on AWS documentation and blog about live streaming app use cases. I made this architecture to define a resilient and reliable live streaming system.</p>
+<p><img alt="" src="images/livestream-app-solution-architecture.png"></p>
+<p>Based on the architecture above, AWS services that might involve in building live streaming system are:</p>
+<ul>
+<li>Route53, storing DNS record</li>
+<li>Application Load Balancer (ALB), I expect to use zonal load balancer. So the backend application services might distributed in different zone in Singapore region</li>
+<li>Fargate, I expect to use Fargate since it's the easiest way to manage containerized service. But unfortunately, it's stil only available for Singapore region</li>
+<li>Simple Queue Service (SQS), this service will be used to process tasks that should be performed exactly once such as sending push notification to client</li>
+<li>Simple Notification Service (SNS), this service will be used to announce the mentee about the live streaming schedule from their mentors</li>
+<li>Relational Database Service (RDS) for PostgreSQL, this service will be act as a primary datastore for live streaming app and other services related into live streaming business processes</li>
+<li>MediaLive, this service will let mentors to perform live streaming to their mentees</li>
+<li>MediaPackage, this service will record live streaming session for mentees if the want to watch again the session</li>
+<li>Simple Storage Service (S3), this service will store live streaming files and recorderd video for mentees</li>
+<li>Lambda, this service will store S3 path to particular session datapoint in RDS for PostgreSQL</li>
+<li>CloudFront, this ervice will help MediaLive to perform live streaming and play recorded video to my mentees with high availability</li>
+</ul>
+<p>Some services might might be go public but with strict measurement are:</p>
+<ul>
+<li>CloudFront</li>
+<li>S3 Buckets</li>
+<li>Application Load Balancer with public IP address</li>
+<li>MediaLive</li>
+</ul>
+<p>I assume these services are located inside private network. So it should be secure enough and prevent unwanted access from outside.</p>
+<ul>
+<li>Fargate</li>
+<li>SQS</li>
+<li>SNS</li>
+<li>RDS</li>
+<li>MediaPackage</li>
+<li>Lambda Function</li>
+</ul>
+<p>Furthermore, I choose those services above because AWS have all of required services to build live streaming solution and easily manage in single place. Moreover, I couldn't find similar solution such as MediaLive and MediaPackage from another services or cloud providers.</p>
+<p>Now, let me explain  more about the architecture and proposed AWS services by following the step by step number on the diagram above:</p>
+<ol>
+<li>Mentor by using the mobile app will ask Route53 to perform the live streaming by accessing the domain name and required endpoint. I assume the endpoint name is <code>/livestream/</code></li>
+<li>Route53 will let the request going through ALB </li>
+<li>ALB select <code>My Mentee Service</code> in different region with <code>round-robin like balancing</code></li>
+<li><code>My Mentee Service</code> create new live streaming session and store related datapoints in PostgreSQL master node on top of RDS</li>
+<li><code>My Mentee Service</code> fetch related information from PostgreSQL slave node. This information will be transformed into payload. The payload might contain live streaming session created by mentor and list of mentees</li>
+<li>We must ensure if every mentees are well announced by the system. In that case, every mentees datapoints will be queued to SQS and later will be notified by push notification</li>
+<li>SQS send each queued mentee datapoint to SNS by using event-triggered approach</li>
+<li>SNS send push notification to mobile app used by mentees</li>
+<li>Back to <code>My Mentee Service</code>, the service send response to ALB</li>
+<li>ALB forward <code>My Mentee Service</code> response to Route53</li>
+<li>Mentor receive <code>/livestream/</code> response that live streaming session has been scheduled and give information that mentees will be notified soon</li>
+<li>Mentor start live streaming session based on the schedule through MediaLive URL</li>
+<li>MediaLive storing streamed video in HLS format at S3 bucket called <code>hls-bucket</code></li>
+<li>the streamed video is distributed to mentees through CloudFront by using specific protocol for live streaming purpose</li>
+<li>at the same time, MediaPackage help us by recording the live streaming session </li>
+<li>Then store the recorded video to S3 bucket called <code>recorded-media-bucket</code> with some general format for video player that will be used by mentees</li>
+<li>recorded video is accessible through CloudFront by using specific protocol for video streaming purpose</li>
+<li>Every stream request through CloudFront both for live streaming or video streaming is logged to S3 bucket called <code>cdn-log-bucket</code> for analytic purpose</li>
+<li>Recorded video has S3 URI or path so it will be put in related live streaming session datapoint in PostgreSQL</li>
+<li>Lambda function receives trigger from S3 bucket <code>recorded-media-bucket</code> and store the S3 URI to related live streaming session data point through PostgreSQL master node</li>
+<li>Through mobile app, mentee start opening live streaming schedule whether they accessing from push notification or open the mentor page. I assume the URL is <code>/mentor/&lt;:id&gt;/live/&lt;:live_id&gt;/</code> and forwarded to Route53</li>
+<li>Route53 forward mentee request to ALB</li>
+<li>ALB select <code>My Mentor Service</code> in different region with <code>round-robin like balancing</code></li>
+<li><code>My Mentor Service</code> fetch the detail of live streaming session from PostgreSQL slave node. The payload might contain information such as CloudFront URL for the live streaming session or recorded session, mentor profile and course detail.</li>
+<li><code>My Mentor Service</code> return the payload required by mentee to ALB</li>
+<li>ALB forward <code>My Mentor Service</code> response to Route53</li>
+<li>Mentee receive the <code>/mentor/&lt;:id&gt;/live/&lt;:live_id&gt;/</code> from Route53</li>
+<li>While watching the live streaming session, mentee is also able to send reactions and comments to mentor. I assume the URL is <code>/mentor/&lt;:id&gt;/live/&lt;:live_id&gt;/reaction</code> the reaction could be choosing different reaction button or send comments during the live streaming session</li>
+<li>Route53 forward mentee request to ALB</li>
+<li>ALB select <code>Social Media Service</code> in different region with <code>round-robin like balancing</code></li>
+<li><code>Social Media Service</code> store the reaction to live streaming session related data points</li>
+<li><code>Social Media Service</code> fetch reactions and comments during live streaming from PostgreSQL slave node</li>
+<li><code>Social Media Service</code> pack the information as playload and forward it to ALB</li>
+<li>ALB forward the <code>Social Media Service</code> response to Route53</li>
+<li>Mentee receive the <code>/mentor/&lt;:id&gt;/live/&lt;:;ive_id&gt;/reaction</code> payload from Route53</li>
+</ol>
+<p>That's the explanation of the above diagram by using step by step approach. You may check enlarged diagram through this <a href="https://drive.google.com/file/d/10dLIEEIb_2gqbfVw5GhzCQ9prS7ridgs/view?usp=sharing">draw.io link</a></p>
+<blockquote>
+<blockquote>
+<p>NOTE: this architecture is not proven on lab environment even more at production. As I explained before, I build this architecture by using research approach from various materials such as AWS documentation and blog. The purpose of this solution architecture just to shape my system design skill based on AWS Well-architected framework and answer an interview case study challenge. Thank you for your understanding.</p>
+</blockquote>
+</blockquote>
+<h3>A.2. What's missing from the architecture above?</h3>
+<p>Some parts that missed from architecture are:</p>
+<ul>
+<li>Auth, Payment and other undocumented service</li>
+<li>VPC and Security Group configuration</li>
+<li>Regional and Zone placement detail</li>
+<li>Autoscaling architecture</li>
+<li>CI/CD pipeline architecture</li>
+<li>Monitoring and logging architecture</li>
+<li>Data pipeline and analytic architecture</li>
+</ul>
+<p>Because it's not required explitcitly on the requirements and might the diagram too crowded and hard to understand.</p>
+<h3>A.3. What's another alternatives from the architecture above?</h3>
+<p><strong>Alternative available outside AWS:</strong></p>
+<ul>
+<li>Route53, we might use Exoscale DNS, Sectigo or CloudFlare DNS since it has the fasters dns resolution time based on <a href="https://www.dnsperf.com/">DNSPerf</a>. At the time this architecture written, Exoscale DNS and Sectigo are the fastest DNS provider with query speed around 10.71 ms</li>
+<li>Simple Notification Service (SNS), we might use Firebase, UrbanAirship or Twillio as another alternatives of SNS</li>
+<li>Relational Database Service (RDS) for PostgreSQL, we might use another managed service for relational database such as GCP CloudSQL, Azure SQL and many more. But it should be well-configured in order to have minimum network latency.</li>
+<li>Simple Storage Service (S3), we might use GCP Cloud Storage or build it by ourselves by using Ceph, Minio and many more open source products. But I am sure S3 is the best.</li>
+<li>CloudFront, there are lot of CDN provider such as Akamai, CloudFlare, GCP CDN, Limelight CDN, ScentsCDN. But based on the <a href="https://www.cdnperf.com/">https://www.cdnperf.com/</a> CloudFront itself has 4th rank among other CDN providers. At the time this architecture written, ScentsCDN is the fastest CDN with query speed 25.89 ms</li>
+</ul>
+<p><strong>Alternative available internally in AWS:</strong></p>
+<ul>
+<li>Fargate, if we stick with AWS, we might use EKS standard (kubernetes node), Elastic Beanstalk, Lambda Function or just using EC2 with autoscaling configured</li>
+<li>Simple Queue Service (SQS), we might use NSQ, RabbitMQ or Redis queue deployed on EC2. But it should be as a cluster configured</li>
+</ul>
+<p><strong>There might not alternatives:</strong></p>
+<ul>
+<li>Application Load Balancer (ALB), we might use another load balancer such as from Google Cloud Platform. But we might migrate all backend services to GCP too</li>
+<li>MediaLive, I can't find it in GCP or other big player in cloud</li>
+<li>MediaPackage, I can't find it in GCP or other big player in cloud</li>
+<li>Lambda, if we want to have <strong>event-based trigger</strong> approach along with AWS services. It's better to use AWS Lambda itself.</li>
+</ul>
+<h2>B. Cost Estimation</h2>
+<h2>B.1. Assumption</h2>
+<p>I propose some assumptions in estimating the cost of the architecture such as:  </p>
+<ol>
+<li>Excluding those parts from cost estimation:<ul>
+<li>Auth, Payment and other undocumented service</li>
+<li>VPC and Security Group configuration</li>
+<li>Regional and Zone placement detail</li>
+<li>Autoscaling architecture</li>
+<li>CI/CD pipeline architecture</li>
+<li>Monitoring and logging architecture</li>
+<li>Data pipeline and analytic architecture</li>
+</ul>
+</li>
+<li>As stated in the case study definition:<ul>
+<li>daily active users: 10K</li>
+<li>growh per month: 10%</li>
+<li>So in the twelve month we might found around 28.531 users</li>
+</ul>
+</li>
+<li>I assume that 80% of daily active users will be actively accessing our services for livestreaming purpose around 18:00 - 20:00 and 20% of daily active users around 20:01 - 17:59<ul>
+<li>between 18.00 - 20.00, I call it as primetime active users</li>
+<li>between 20.01 - 17.59, I call it as non-primetime active users</li>
+</ul>
+</li>
+<li>Video quality is HD with size around 1.5GB for 1 hour duration</li>
+<li>session will be conducted 8 times per month</li>
+<li>Users might accessing these imaginery endpoints<ul>
+<li>Assume around 21 requests per user to backend service<ul>
+<li>token auth, 1 request</li>
+<li>open mentor page, 3 requests</li>
+<li>fetch video / live streaming metadata, 3 requests</li>
+<li>fetch reaction and comments, 3 requests</li>
+<li>send reaction, 3 requests</li>
+<li>send comment, 9 requests</li>
+</ul>
+</li>
+<li>Assume around 6 requests per user to CloudFront<ul>
+<li>open live streaming, 3 requests</li>
+<li>open video streaming 3 requests</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>I calculate request per second based on poin 2, 3 and 6.</li>
+<li>The system will be scaled every quarter based on the user growth estimation</li>
+</ol>
+<p><img alt="" src="images/livestream-rps-estimation.png"></p>
+<p>You may check full of DAU growth estimation based on above assumption from this spreadsheet:</p>
+<ul>
+<li><a href="https://docs.google.com/spreadsheets/d/1ooiLlBQ-hEs6TkhPXOw3vMNhfrhx6lfqmGPvAUwTXhQ/edit#gid=0">DAU growth estimation Google Spreadsheet</a></li>
+</ul>
+<h2>B.2. Cost Estimation Summary</h2>
+<p>Based on multiple assumptions above, I would like to propose the cost estimation summary for first month and first twelve months:</p>
+<p><img alt="" src="images/livestream-cost-estimation.png"></p>
+<p>Let me explain what is scale factors. It's just multiplier based on users count and RPS growth per quarter. Scale factor determined from the first month as a baseline. For example:</p>
+<ul>
+<li>For Q1 and Q2, Route53 will remain scaled 1 time. But in Q3 and Q4 the price might increase twice</li>
+<li>For <code>My Mentor Service</code>, <code>My Mentee Service</code> and <code>Social Media Service</code> which got more active users during primetime has initial scale <strong>3</strong>. In Q2 has scale 4 times, Q3 has scale 5 times and Q4 has scale 7 times.</li>
+</ul>
+<p>The first month cost estimatedly around 19.450 USD. And for the first 12 months, we might have 350.011 USD since we have a growth user for 10% every month</p>
+<p>sources:  </p>
+<ul>
+<li><a href="https://docs.google.com/spreadsheets/d/1ooiLlBQ-hEs6TkhPXOw3vMNhfrhx6lfqmGPvAUwTXhQ/edit#gid=1239772769">Cost estimation growth in Google Spreadsheet</a></li>
+<li><a href="https://calculator.aws/#/estimate?id=50109a84dfe8d2e666ecc5a0029a9b39df6eca27">First month cost estimation using AWS Calculator</a></li>
+</ul>
+<h2>C. Architecture Consideration</h2>
+<p>Let me explain the architecture consideration from the above diagram based on design principles from AWS Well-architected Framework Guideline Pillars.</p>
+<h3>C.1. Operational Excellence</h3>
+<blockquote>
+<blockquote>
+<p>How can your design help us to develop faster and operate easier?</p>
+</blockquote>
+</blockquote>
+<p>Architecture-related principles:</p>
+<ul>
+<li><strong>Perform operations as code:</strong><ul>
+<li>As Terraform user and sometime use it on daily basis, I believe the infrastructure above is able to be reproduced by using IaaC tools such as Terraform. Terraform has a complete API for AWS to build infrastructure on top of it.</li>
+<li>Moreover, by using combination of Git and Terraform collaboration tools (e.g. Atlantis, Terraform Cloud) we could create collaborative IaaC development with more strict peer-reviewed process. In AWS itself we might use CloudFormation</li>
+</ul>
+</li>
+<li><strong>Make frequent, small and reversible changes:</strong>,<ul>
+<li>since I proposed Fargate the development of backend services might use container such as Docker to have frequent, small and reversible changes. I've experienced it by myself with an old container orchestration system called Rancher v1.0 I easily reverse the change to previous version</li>
+<li>Also it could be combined with CI/CD solution such as TravisCI or Jenkins. In AWS itself we might use CodeBuild and CodeDeploy</li>
+</ul>
+</li>
+<li><strong>Anticipate failure:</strong><ul>
+<li>we might conduct infrastructure testing periodically such as stress testing, load testing, monkey testing or chaos testing to find failure and response into found issues with proper post-mortem. From this approach teams could response properly to any failure or incidents and improve the architecture itself. </li>
+<li>I propose CloudFront for CDN because it's highly available CDN provided and managed service by AWS</li>
+<li>I propose S3 for video storage because it has the highest availablility and managed service by AWS</li>
+<li>I propose SQS for message queue because it's also highly available and managed serviceby AWS</li>
+<li>I propose SNS for push notification service because it's also highly available, fast and managed service by AWS</li>
+<li>I propose Application Load Balancer combined with Fargate to deploy backend services in diffrent zone and should be highly available. So if there is a downtime or disruption in particular zone, other zones are still able to serve requests from mentee</li>
+<li>I propose RDS with replication configured so write operation could be focused in master node. Read operation might be splitted between slave node and master node. Slave node should have the largest portion for read operation rather than master node.</li>
+</ul>
+</li>
+</ul>
+<p>Non architecture-related principles but nice to have:</p>
+<ul>
+<li><strong>Refine operations procedures frequently:</strong> since the architecture is quite complex. We have to conduct a end-to-end testing both automatically or manually by QA Team. Moreover, all procedures related to the architecture should be tested frequently by task force from infrastructure team, developers, QA Team, security team and business. From this approach teams could response properly to any failure or incidents and improve the procedure itself</li>
+<li><strong>Learn from all operational failures:</strong> by using knowledge management we could collect all operational failures, post-mortem and improvement documentation from different teams to improve our services. We might use Slab, DropBox Paper or Google Docs to accommodate this principle</li>
+</ul>
+<h3>C.2. Security</h3>
+<blockquote>
+<blockquote>
+<p>How does your design have ability to protect our assets from unwanted use?</p>
+</blockquote>
+</blockquote>
+<p>Architecture-related principles:</p>
+<ul>
+<li><strong>Implement a strong identity foundation:</strong> I propose the architecture above inside private network. Of course, I have to define IAM roles to be assigned to each infrastructure engineer with at least privilege approach.</li>
+<li><strong>Enable traceability:</strong> I add S3 Bucket to store CloudFront logs when receiving request for live streaming or recorded session. Moreover, if we enable CloudWatch on services such as Fargate. We could see the logs of Docker service run on it for further analysis.</li>
+<li><strong>Apply security at all layers:</strong> The architecture above might have a security measurement in each services. For example, we could implement restriction on S3 Bucket, CloudFront, Application Load Balancer and Route53. For other services such as Fargate, AWS Lambda and RDS are deployed within private network </li>
+<li><strong>Automate security best practices:</strong> The security of the architecture above could be handled by using Terraform and use Github to manage the version control</li>
+<li><strong>Protect data in transit and at rest:</strong> S3 has this mechanism and AWS has secure transport layer</li>
+<li><strong>Keep people away from data:</strong> only engineer who has proper privilege that can access the database in RDS. Also, we could implement at least privilege on S3 Bucket for recorded video to restrict access into it </li>
+</ul>
+<p>Non architecture-related principles but nice to have:</p>
+<ul>
+<li><strong>Prepare for security events:</strong> we might perform chaos testing upon the architecture above. Learn what kind of issue that we might encounter during the simulation and how we response into that issue.</li>
+</ul>
+<h3>C.3. Reliability</h3>
+<blockquote>
+<blockquote>
+<p>How can your design run correctly and consistently in time of failure?</p>
+</blockquote>
+</blockquote>
+<p>Architecture-related principles:</p>
+<ul>
+<li><strong>Automatically recover from failure:</strong><ul>
+<li>Fargate could help us to restart service which experiencing downtime</li>
+<li>If PostgreSQL master node crash, RDS has mechanism to promote slave node into master node</li>
+<li>Since the architecture is predominately by AWS managed services and serverless, downtime might rarely happen because it's handled by AWS</li>
+</ul>
+</li>
+<li><strong>Scale horizontally to increase aggregate workload availability:</strong> Combination of ALB and Fargate could make this principle possible by using horizontal auto-scaling for our backend services</li>
+<li><strong>Stop guessing capacity:</strong> by using Fargate, we could control the number of workloads based on time event or resource usage. In this example, we might scale up workloads from 06.00 PM to 08.00 PM into 3 - 5 pods. Then we could scale down our workloads back into single pod</li>
+<li><strong>Manage change in automation:</strong> by using Terraform, Atlantis and Github we could manage infrastructure change from the architecture above with automatic and collaborative approach</li>
+</ul>
+<p>Non architecture-related principles but nice to have:</p>
+<ul>
+<li><strong>Test recovery procedure:</strong> similar to <strong>Security - Prepare for security events</strong> answer</li>
+</ul>
+<h3>C.4. Performance Efficiency</h3>
+<blockquote>
+<p>How are your design able to use the computing resources efficiently?</p>
+</blockquote>
+<p>Architecture-related principles:</p>
+<ul>
+<li><strong>Use serverless architectures:</strong> The architecture above is using multiple serverless managed services such as Fargate, Route53, CloudFront, MediaLive, MediaPackage, S3, SQS and SNS </li>
+</ul>
+<p>Non architecture-related principles but nice to have:</p>
+<ul>
+<li><strong>Democratize advanced technologies:</strong> The architecture above is using multiple serverless managed services such as MediaLive and MediaPackage that could help developers to build live streaming application without starting from zero by developing in-house live streaming solution</li>
+<li><strong>Go global in minutes:</strong> if it's possible we might enable CloudFront, S3 and Route53 to make our services globally deployed</li>
+<li><strong>Experiment more often:</strong> by using Terraform, we could build a replica of our infrastructure for testing purpose</li>
+<li><strong>Consider mechanical sympathy</strong> we might evaluate the architecture and improve or switch another solution based on data access patterns from our clients</li>
+</ul>
+<h3>C.5. Cost Optimization</h3>
+<blockquote>
+<blockquote>
+<p>How are your design able to give us the lowest price point available while serving the requirements?</p>
+</blockquote>
+</blockquote>
+<p>Architecture-related principles:</p>
+<ul>
+<li><strong>Implement cloud financial management:</strong> we can monitor the resource usage if it's under utilized and perform cost optimization</li>
+<li><strong>Adopt a consumption model:</strong> since the infrastructure use serverless manage service such as Fargate, workload resource consumption will be based on pay as you go model. So if there are no any requests, we won't be charged by AWS</li>
+</ul>
+<p>Non architecture-related principles but nice to have:</p>
+<ul>
+<li><strong>Measure overall efficiency:</strong> similar to <strong>Implement cloud financial management</strong> answer</li>
+<li><strong>Stop spending money on undifferentiated heavy lifting:</strong> most component from the architecture above are managed services and serverless. In that case, we don't have heavy lifting task related to on-premise deployment</li>
+<li><strong>Analyze and attribute expenditure:</strong> we can monitor the resource usage to be more efficient with highest ROI</li>
+</ul>
+<h2>D. References</h2>
+<p><strong>AWS Documentation:</strong></p>
+<ul>
+<li><a href="https://aws.amazon.com/solutions/implementations/live-streaming-on-aws/">https://aws.amazon.com/solutions/implementations/live-streaming-on-aws/</a></li>
+<li><a href="https://docs.aws.amazon.com/solutions/latest/live-streaming-on-aws-with-amazon-s3/cost.html">https://docs.aws.amazon.com/solutions/latest/live-streaming-on-aws-with-amazon-s3/cost.html</a></li>
+<li><a href="https://docs.aws.amazon.com/solutions/latest/live-streaming-on-aws-with-amazon-s3/welcome.html">https://docs.aws.amazon.com/solutions/latest/live-streaming-on-aws-with-amazon-s3/welcome.html</a></li>
+<li><a href="https://aws.amazon.com/cloudfront/streaming/">https://aws.amazon.com/cloudfront/streaming/</a></li>
+<li><a href="https://docs.aws.amazon.com/solutions/latest/live-streaming/welcome.html">https://docs.aws.amazon.com/solutions/latest/live-streaming/welcome.html</a></li>
+<li><a href="https://aws.amazon.com/medialive/">https://aws.amazon.com/medialive/</a></li>
+<li><a href="https://aws.amazon.com/MediaPackage/?c=ms&amp;sec=srv">https://aws.amazon.com/MediaPackage/?c=ms&amp;sec=srv</a></li>
+<li><a href="https://aws.amazon.com/fargate/?nc=sn&amp;loc=1">https://aws.amazon.com/fargate/?nc=sn&amp;loc=1</a></li>
+<li><a href="https://aws.amazon.com/rds/postgresql/">https://aws.amazon.com/rds/postgresql/</a></li>
+<li><a href="https://aws.amazon.com/route53/">https://aws.amazon.com/route53/</a></li>
+<li><a href="https://aws.amazon.com/eks/">https://aws.amazon.com/eks/</a></li>
+<li><a href="https://aws.amazon.com/mediapackage/?c=ms&amp;sec=srv">https://aws.amazon.com/mediapackage/?c=ms&amp;sec=srv</a></li>
+<li><a href="https://aws.amazon.com/mediaconvert/?c=ms&amp;sec=srv">https://aws.amazon.com/mediaconvert/?c=ms&amp;sec=srv</a></li>
+<li><a href="https://aws.amazon.com/ivs/">https://aws.amazon.com/ivs/</a></li>
+</ul>
+<p><strong>AWS Blog:</strong></p>
+<ul>
+<li><a href="https://aws.amazon.com/blogs/media/build-a-live-streaming-app-with-user-generated-content-in-less-than-an-hour-with-amazon-ivs/">https://aws.amazon.com/blogs/media/build-a-live-streaming-app-with-user-generated-content-in-less-than-an-hour-with-amazon-ivs/</a></li>
+<li><a href="https://aws.amazon.com/blogs/media/awse-choosing-aws-live-streaming-solution-for-use-case/">https://aws.amazon.com/blogs/media/awse-choosing-aws-live-streaming-solution-for-use-case/</a></li>
+<li><a href="https://aws.amazon.com/blogs/media/build-an-android-app-with-a-scrollable-feed-of-live-streams/">https://aws.amazon.com/blogs/media/build-an-android-app-with-a-scrollable-feed-of-live-streams/</a></li>
+<li><a href="https://aws.amazon.com/blogs/media/how-to-build-a-video-chat-application-for-live-streams-using-aws-amplify-and-aws-media-services/">https://aws.amazon.com/blogs/media/how-to-build-a-video-chat-application-for-live-streams-using-aws-amplify-and-aws-media-services/</a></li>
+<li><a href="https://aws.amazon.com/blogs/media/building-a-live-streaming-app-for-all-hands-meetings-and-more-on-screencloud-with-amazon-ivs/">https://aws.amazon.com/blogs/media/building-a-live-streaming-app-for-all-hands-meetings-and-more-on-screencloud-with-amazon-ivs/</a></li>
+</ul>
+<p><strong>AWS Well-architected Framework Guideline:</strong></p>
+<ul>
+<li><a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html">https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html</a></li>
+</ul>
+<p><strong>Other:</strong></p>
+<ul>
+<li><a href="https://www.cleveroad.com/blog/how-to-build-a-live-streaming-app">https://www.cleveroad.com/blog/how-to-build-a-live-streaming-app</a></li>
+<li><a href="https://www.rootstrap.com/blog/how-to-create-a-live-streaming-platform/">https://www.rootstrap.com/blog/how-to-create-a-live-streaming-platform/</a></li>
+</ul>
+
+</body>
+</html>
